@@ -68,34 +68,62 @@ public class SeatGate {
     }
 
     /**
+     * The three things that can happen at the gate.
+     *
+     * <p>Two states would not be enough. "I could not claim the seat" and "I
+     * could not reach Redis" look identical to a boolean, and collapsing them
+     * forces the caller either to treat an infrastructure outage as though every
+     * seat were sold, or to let the exception escape and fail the request. Both
+     * turn a cache problem into a booking problem.
+     */
+    public enum Outcome {
+        /** The seats are claimed until the caller releases them or the lease expires. */
+        ACQUIRED,
+        /** Someone else holds at least one seat. A real answer, and a fast one. */
+        REJECTED,
+        /** Redis could not be reached. No claim was made and none is possible. */
+        UNAVAILABLE
+    }
+
+    /**
      * Attempts to claim every seat, all or nothing.
      *
      * <p>Seat ids must already be in a consistent (ascending) order. Acquiring in
      * a fixed global order is what stops two overlapping multi-seat requests from
      * deadlocking each other: without it, one request holding seat 5 can wait on
-     * seat 9 while the other holds 9 and waits on 5.
+     * seat 9 while the other holds 9 and waits for 5.
      *
-     * @return true if all seats were claimed; on false nothing is left claimed
+     * <p>On anything other than {@link Outcome#ACQUIRED}, nothing is left claimed.
      */
-    public boolean tryAcquireAll(Long eventId, List<Long> orderedSeatIds, String token) {
+    public Outcome tryAcquireAll(Long eventId, List<Long> orderedSeatIds, String token) {
         List<Long> claimed = new ArrayList<>(orderedSeatIds.size());
+
         for (Long seatId : orderedSeatIds) {
-            if (tryAcquire(eventId, seatId, token)) {
+            Boolean ok;
+            try {
+                ok = redis.opsForValue().setIfAbsent(key(eventId, seatId), token, props.lockLease());
+            } catch (RuntimeException e) {
+                // Redis is down, timing out, or failing over. This is precisely
+                // why the class is documented as an optimisation: the request
+                // carries on to Postgres, which was going to decide the outcome
+                // anyway. Throwing here would turn a cache outage into a total
+                // booking outage, which is the opposite of what a cache is for.
+                log.warn("Seat gate unavailable for event {}; falling through to the database: {}",
+                        eventId, e.toString());
+                releaseAll(eventId, claimed, token);
+                return Outcome.UNAVAILABLE;
+            }
+
+            if (Boolean.TRUE.equals(ok)) {
                 claimed.add(seatId);
             } else {
-                // Partial claims must not linger, or a failed request would keep
-                // seats unbuyable until the lease expired.
+                // Partial claims must not linger, or a rejected request would
+                // keep seats unbuyable until the lease expired.
                 releaseAll(eventId, claimed, token);
-                return false;
+                return Outcome.REJECTED;
             }
         }
-        return true;
-    }
-
-    private boolean tryAcquire(Long eventId, Long seatId, String token) {
-        Boolean ok = redis.opsForValue()
-                .setIfAbsent(key(eventId, seatId), token, props.lockLease());
-        return Boolean.TRUE.equals(ok);
+        return Outcome.ACQUIRED;
     }
 
     public void releaseAll(Long eventId, List<Long> seatIds, String token) {

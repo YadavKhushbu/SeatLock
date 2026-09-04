@@ -49,6 +49,7 @@ public class SeatHoldService {
     private final Counter holdsGranted;
     private final Counter holdsRejectedAtGate;
     private final Counter holdsRejectedAtDatabase;
+    private final Counter gateDegraded;
     private final Timer holdLatency;
 
     public SeatHoldService(SeatGate gate,
@@ -71,6 +72,12 @@ public class SeatHoldService {
                 .tag("outcome", "rejected_at_gate").register(metrics);
         this.holdsRejectedAtDatabase = Counter.builder("seatlock.holds")
                 .tag("outcome", "rejected_at_database").register(metrics);
+        // The alarm that matters operationally. A non-zero rate means Redis is
+        // unreachable and every hold is going straight to the row lock: still
+        // correct, but the protection against a stampede is gone, so this should
+        // page someone before the next on-sale rather than after it.
+        this.gateDegraded = Counter.builder("seatlock.holds")
+                .tag("outcome", "gate_unavailable").register(metrics);
         this.holdLatency = Timer.builder("seatlock.hold.duration")
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .register(metrics);
@@ -92,9 +99,21 @@ public class SeatHoldService {
         List<Long> seatIds = requestedSeatIds.stream().distinct().sorted().toList();
 
         String token = UUID.randomUUID().toString();
-        if (!gate.tryAcquireAll(eventId, seatIds, token)) {
+        SeatGate.Outcome gateOutcome = gate.tryAcquireAll(eventId, seatIds, token);
+
+        if (gateOutcome == SeatGate.Outcome.REJECTED) {
             holdsRejectedAtGate.increment();
             throw new Exceptions.SeatUnavailable("One or more seats are being booked by someone else");
+        }
+
+        // Redis is unreachable. Carry on anyway: the gate only ever decided who
+        // got to *ask*, and Postgres decides who actually wins. Bookings get
+        // slower under this path because real contention now queues on the row
+        // lock instead of being turned away early, but nothing becomes incorrect
+        // and nothing becomes unavailable.
+        boolean holdsGate = gateOutcome == SeatGate.Outcome.ACQUIRED;
+        if (!holdsGate) {
+            gateDegraded.increment();
         }
 
         boolean granted = false;
@@ -103,9 +122,12 @@ public class SeatHoldService {
             Dtos.HoldResponse response = tx.reserve(eventId, userId, seatIds, props.holdTtl(), now);
             granted = true;
 
-            // The claim now mirrors the hold's lifetime, so further attempts on
-            // these seats are turned away at Redis rather than at a row lock.
-            gate.extendAll(eventId, seatIds, props.holdTtl());
+            if (holdsGate) {
+                // The claim now mirrors the hold's lifetime, so further attempts
+                // on these seats are turned away at Redis rather than at a row
+                // lock. Skipped when the gate is down: there is no claim to extend.
+                gate.extendAll(eventId, seatIds, props.holdTtl());
+            }
 
             holdsGranted.increment();
             return response;
@@ -113,7 +135,7 @@ public class SeatHoldService {
             holdsRejectedAtDatabase.increment();
             throw e;
         } finally {
-            if (!granted) {
+            if (!granted && holdsGate) {
                 // Nothing was reserved, so the claim must go back immediately;
                 // otherwise a rejected request would make seats unbuyable for the
                 // remainder of the lease.

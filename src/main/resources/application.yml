@@ -10,8 +10,14 @@ spring:
       # Deliberately small. A pool larger than the database can service does not
       # add throughput, it just moves the queue somewhere with no visibility and
       # no timeout. Roughly (2 x cores) + effective spindles is the usual start.
+      #
+      # 20 suits a dedicated Postgres. Managed and free-tier databases cap total
+      # connections far lower, across every client rather than per application,
+      # so both values are overridable: set DB_POOL_SIZE=5 and DB_POOL_MIN_IDLE=1
+      # on a small hosted database. Holding more idle connections than the server
+      # allows fails at startup, which is at least loud.
       maximum-pool-size: ${DB_POOL_SIZE:20}
-      minimum-idle: 5
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
       # Fail fast rather than pile up requests waiting for a connection.
       connection-timeout: 3000
       leak-detection-threshold: 20000
@@ -42,6 +48,12 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      # Managed Redis (Upstash, Redis Cloud, ElastiCache in transit-encryption
+      # mode) requires a password and TLS. Both are inert locally, where the
+      # password is empty and REDIS_SSL stays false.
+      password: ${REDIS_PASSWORD:}
+      ssl:
+        enabled: ${REDIS_SSL:false}
       timeout: 500ms   # The gate is a latency optimisation; a slow Redis must
                        # never become the thing that makes checkout slow.
       lettuce:

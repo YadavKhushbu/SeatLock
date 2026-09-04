@@ -1,0 +1,57 @@
+# Fly.io deployment for SeatLock.
+#
+# Postgres and Redis are NOT defined here. They are managed services (Neon and
+# Upstash on the free tiers), reached over the internet and configured entirely
+# through secrets. Nothing about the application changes between local Docker
+# Compose and this file — only environment variables — which is the point of
+# keeping every connection detail env-driven.
+#
+# See DEPLOYMENT.md for the full runbook.
+
+app = "seatlock"
+primary_region = "bom"          # Mumbai. Put the app next to the database, not
+                                # next to yourself: every request makes several
+                                # database round trips and only one to you.
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Non-secret configuration only. Anything sensitive goes through
+  # `fly secrets set`, which is encrypted at rest and never appears in git.
+  PORT = "8080"
+  DB_POOL_SIZE = "5"            # Free-tier Postgres caps total connections well
+  DB_POOL_MIN_IDLE = "1"        # below the local default of 20.
+  REDIS_SSL = "true"            # Upstash is TLS-only.
+  LOG_LEVEL = "INFO"
+  JAVA_OPTS = "-XX:MaxRAMPercentage=70 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # Scale to zero when idle. This is the difference between roughly $0 and a few
+  # dollars a month, and the trade is a ~20-30s cold start on the first request
+  # after a quiet period — plus the hold reaper not running while the machine is
+  # stopped, so abandoned holds expire late rather than on time. Acceptable for a
+  # demo; set min_machines_running = 1 if you want it always warm.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    # Readiness, not liveness. Readiness reports UP only once Flyway has finished
+    # and the datasource answers, so traffic is not sent to a machine that is
+    # still migrating.
+    path = "/actuator/health/readiness"
+    interval = "15s"
+    timeout = "3s"
+    grace_period = "60s"        # Generous: JVM start + Flyway on a cold machine.
+    method = "GET"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"              # Tight but sufficient with MaxRAMPercentage=70.
+                                # If you see ExitOnOutOfMemoryError in the logs,
+                                # go to 1gb rather than raising the percentage —
+                                # the JVM needs headroom outside the heap.

@@ -18,6 +18,7 @@ Java 17 · Spring Boot 3.3 · PostgreSQL · Redis · Testcontainers
 - [Tests: the actual proof](#tests-the-actual-proof)
 - [Design decisions](#design-decisions)
 - [What I would do next](#what-i-would-do-next)
+- [Deploying it](DEPLOYMENT.md)
 
 ---
 
@@ -81,7 +82,11 @@ When ten thousand people hit one seat, letting all ten thousand reach Postgres m
 
 **It is explicitly not what prevents double-selling.** A single-node Redis lock has no safety guarantee across failover: if the primary dies after granting a lock but before replicating it, a promoted replica grants the same lock again. Systems that treat a Redis lock as the source of truth oversell precisely during an incident, when they can least afford it.
 
-Here, losing Redis entirely costs throughput and nothing else. There is a test that proves this by calling the transactional layer directly with the gate bypassed — 60 threads, one seat, still exactly one winner.
+Here, losing Redis entirely costs throughput and nothing else — and that is tested two different ways, because the obvious test is weaker than it looks.
+
+`ConcurrentBookingIT.withoutTheGateThePostgresLayerStillHoldsTheLine` calls *past* the gate into the transactional layer: 60 threads, one seat, exactly one winner. That proves the database layer is sufficient on its own. It does **not** prove the application survives Redis being unreachable, because it never exercises a failing Redis client.
+
+`RedisOutageIT` does. Every Redis call throws, exactly as against a dead server, and holds, bookings, releases and 50-way contention all still work. That test was written after discovering that they didn't: `setIfAbsent` threw on connection failure and the exception escaped the request, so a Redis outage would have returned `500` for every booking attempt. The documentation promised graceful degradation the code did not implement, and the whole suite passed regardless. The gate now returns an explicit `UNAVAILABLE` outcome and the caller falls through to Postgres.
 
 ### Layer 2 — Postgres row locks are where correctness actually lives
 
@@ -237,6 +242,16 @@ The suite in `ConcurrentBookingIT`:
 | `concurrentCheckoutSellsTheSeatExactlyOnce` | Full hold→pay race → 1 booking row, 1 booked seat |
 | `losersGetAConflictNotAFiveHundred` | Losers get `409`, never `500` |
 
+And with Redis genuinely unavailable, in `RedisOutageIT`:
+
+| Test | Asserts |
+|---|---|
+| `holdsStillWorkWithoutRedis` | A cache outage does not become a booking outage |
+| `fullCheckoutWorksWithoutRedis` | Hold → confirm completes with no Redis at all |
+| `postgresStillHoldsTheLineWithNoGateAtAll` | 50 threads, no gate → still exactly one winner |
+| `releaseStillWorksWithoutRedis` | Releasing frees the seat and it is genuinely re-sellable |
+| `contentionIsStillRejectedWithoutRedis` | Failing open means "ask the database", never "assume it is fine" |
+
 Two of those deserve emphasis, because they test the things a "no oversell" assertion alone would miss:
 
 - **`distinctSeatsAllSucceed`** catches locking that is too *coarse*. A table-level lock also passes "nothing was oversold" while serialising every unrelated customer in the venue.
@@ -249,42 +264,49 @@ Threads are released from a shared `CountDownLatch` rather than merely submitted
 `./mvnw verify` on a machine with Docker running. Every test, no skips:
 
 <details>
-<summary><b>24 passed, 0 failed, 0 skipped</b> — click for the full breakdown</summary>
+<summary><b>29 passed, 0 failed, 0 skipped</b> — click for the full breakdown</summary>
 
 ```text
-ApiFlowIT  (8 tests, 19.0s)
-  PASS  releasingAHoldReturnsTheSeats                                1.54s
-  PASS  endToEndCheckout                                             0.33s
-  PASS  reusingAKeyForADifferentRequestIsRejected                    0.23s
-  PASS  eventBrowsingIsPublic                                        0.04s
+ApiFlowIT  (8 tests, 25.2s)
+  PASS  releasingAHoldReturnsTheSeats                                2.17s
+  PASS  endToEndCheckout                                             0.38s
+  PASS  reusingAKeyForADifferentRequestIsRejected                    0.29s
+  PASS  eventBrowsingIsPublic                                        0.05s
   PASS  anonymousCallersAreRejected                                  0.01s
   PASS  validationFailuresAreReportedPerField                        0.10s
-  PASS  holdsArePrivateToTheirOwner                                  0.24s
-  PASS  idempotentRetryReplaysTheOriginalBooking                     0.21s
+  PASS  holdsArePrivateToTheirOwner                                  0.28s
+  PASS  idempotentRetryReplaysTheOriginalBooking                     0.33s
 
-ConcurrentBookingIT  (6 tests, 4.8s)
-  PASS  concurrentCheckoutSellsTheSeatExactlyOnce                    0.47s
-  PASS  overlappingMultiSeatRequestsDoNotDeadlock                    0.45s
-  PASS  withoutTheGateThePostgresLayerStillHoldsTheLine              0.25s
-  PASS  oneSeatUnderMassContention                                   0.32s
-  PASS  distinctSeatsAllSucceed                                      0.70s
-  PASS  losersGetAConflictNotAFiveHundred                            0.08s
+ConcurrentBookingIT  (6 tests, 6.9s)
+  PASS  concurrentCheckoutSellsTheSeatExactlyOnce                    0.63s
+  PASS  overlappingMultiSeatRequestsDoNotDeadlock                    0.74s
+  PASS  withoutTheGateThePostgresLayerStillHoldsTheLine              0.43s
+  PASS  oneSeatUnderMassContention                                   0.59s
+  PASS  distinctSeatsAllSucceed                                      1.29s
+  PASS  losersGetAConflictNotAFiveHundred                            0.13s
 
 JwtServiceTest  (6 tests, 0.0s)
   PASS  foreignIssuerIsRejected                                      0.01s
   PASS  foreignSignatureIsRejected                                   0.00s
   PASS  weakSecretIsRefusedUpFront                                   0.00s
   PASS  roundTrip                                                    0.00s
-  PASS  malformedTokensAreRejected                                   0.00s
-  PASS  expiredTokenIsRejected                                       0.00s
+  PASS  malformedTokensAreRejected                                   0.01s
+  PASS  expiredTokenIsRejected                                       0.01s
+
+RedisOutageIT  (5 tests, 8.0s)
+  PASS  holdsStillWorkWithoutRedis                                   0.37s
+  PASS  fullCheckoutWorksWithoutRedis                                0.15s
+  PASS  postgresStillHoldsTheLineWithNoGateAtAll                     0.55s
+  PASS  releaseStillWorksWithoutRedis                                0.18s
+  PASS  contentionIsStillRejectedWithoutRedis                        0.10s
 
 SeatHoldDomainTest  (4 tests, 0.0s)
-  PASS  closingStampsItems                                           0.00s
+  PASS  closingStampsItems                                           0.02s
   PASS  closingIsIdempotentPerItem                                   0.00s
   PASS  liveness                                                     0.00s
   PASS  salesWindow                                                  0.00s
 
-Tests run: 24, Failures: 0, Errors: 0, Skipped: 0
+Tests run: 29, Failures: 0, Errors: 0, Skipped: 0
 BUILD SUCCESS
 ```
 
