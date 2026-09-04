@@ -244,6 +244,54 @@ Two of those deserve emphasis, because they test the things a "no oversell" asse
 
 Threads are released from a shared `CountDownLatch` rather than merely submitted to a pool. Submitting N tasks staggers them by however long it takes to hand each to a thread — on a fast machine, long enough that most finish before the last starts, so the test never creates contention and passes whether or not the locking works. The pool is also sized to one thread per attempt: with a smaller pool the queued tasks never reach the latch and the harness deadlocks itself rather than testing anything.
 
+### The run
+
+`./mvnw verify` on a machine with Docker running. Every test, no skips:
+
+<details>
+<summary><b>24 passed, 0 failed, 0 skipped</b> — click for the full breakdown</summary>
+
+```text
+ApiFlowIT  (8 tests, 19.0s)
+  PASS  releasingAHoldReturnsTheSeats                                1.54s
+  PASS  endToEndCheckout                                             0.33s
+  PASS  reusingAKeyForADifferentRequestIsRejected                    0.23s
+  PASS  eventBrowsingIsPublic                                        0.04s
+  PASS  anonymousCallersAreRejected                                  0.01s
+  PASS  validationFailuresAreReportedPerField                        0.10s
+  PASS  holdsArePrivateToTheirOwner                                  0.24s
+  PASS  idempotentRetryReplaysTheOriginalBooking                     0.21s
+
+ConcurrentBookingIT  (6 tests, 4.8s)
+  PASS  concurrentCheckoutSellsTheSeatExactlyOnce                    0.47s
+  PASS  overlappingMultiSeatRequestsDoNotDeadlock                    0.45s
+  PASS  withoutTheGateThePostgresLayerStillHoldsTheLine              0.25s
+  PASS  oneSeatUnderMassContention                                   0.32s
+  PASS  distinctSeatsAllSucceed                                      0.70s
+  PASS  losersGetAConflictNotAFiveHundred                            0.08s
+
+JwtServiceTest  (6 tests, 0.0s)
+  PASS  foreignIssuerIsRejected                                      0.01s
+  PASS  foreignSignatureIsRejected                                   0.00s
+  PASS  weakSecretIsRefusedUpFront                                   0.00s
+  PASS  roundTrip                                                    0.00s
+  PASS  malformedTokensAreRejected                                   0.00s
+  PASS  expiredTokenIsRejected                                       0.00s
+
+SeatHoldDomainTest  (4 tests, 0.0s)
+  PASS  closingStampsItems                                           0.00s
+  PASS  closingIsIdempotentPerItem                                   0.00s
+  PASS  liveness                                                     0.00s
+  PASS  salesWindow                                                  0.00s
+
+Tests run: 24, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+</details>
+
+The `ConcurrentBookingIT` timings worth noticing are the fast ones. `oneSeatUnderMassContention` settles 200 competing threads in 0.32s and `losersGetAConflictNotAFiveHundred` resolves 30 in 0.08s — because the Redis gate rejects the losers before they ever reach a database connection. `withoutTheGateThePostgresLayerStillHoldsTheLine` takes longer per attempt precisely because it bypasses that gate and makes 60 threads queue on the row lock, which is the point of the test.
+
 ### If Testcontainers says "Could not find a valid Docker environment"
 
 Two things bite on recent Docker installs, and both are already handled in this repo:
