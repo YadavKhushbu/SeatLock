@@ -294,16 +294,23 @@ The `ConcurrentBookingIT` timings worth noticing are the fast ones. `oneSeatUnde
 
 ### If Testcontainers says "Could not find a valid Docker environment"
 
-Two things bite on recent Docker installs, and both are already handled in this repo:
+Already handled in this repo, but worth knowing why, because the error message points at entirely the wrong thing.
 
-- **API version.** `docker-java` negotiates Engine API `1.32`, but Docker Engine 29 accepts nothing below `1.40`. The rejection arrives as a bare HTTP 400 that Testcontainers reports as a missing Docker environment, which sends you hunting for socket permissions instead of a version number. Pinned via `-Dapi.version=1.43` in the Surefire config.
-- **The named pipe on Windows.** Docker Desktop's legacy `\\.\pipe\docker_engine` is a stub that answers with a pointer to the real endpoint. If detection still fails, put this in `~/.testcontainers.properties`:
+`docker-java` negotiates Engine API `1.32`. Docker Engine 29 accepts nothing below `1.40` and rejects the handshake with a bare HTTP 400 whose body is an *empty but well-formed* `/info` response. Testcontainers reports that as "Could not find a valid Docker environment" — so you go hunting through socket paths, named pipes and permissions, none of which are the problem. The fix is one number:
 
-  ```properties
-  docker.host=npipe:////./pipe/dockerDesktopLinuxEngine
-  ```
+```xml
+<systemPropertyVariables>
+  <api.version>1.43</api.version>
+</systemPropertyVariables>
+```
 
-Check what your daemon actually supports with `docker version --format '{{.Server.MinAPIVersion}}'`.
+Check what your daemon actually accepts with:
+
+```bash
+docker version --format '{{.Server.MinAPIVersion}}'
+```
+
+**The failure mode is worse than it looks.** These tests are guarded by `@EnabledIf(dockerIsAvailable)` so they skip rather than fail when Docker is absent — which is right for a laptop, but means a version mismatch produces `Tests run: 6, Skipped: 6` and `BUILD SUCCESS`. A green build proving nothing. If you are ever unsure the integration tests really ran, check the skip count, not the exit code.
 
 ---
 

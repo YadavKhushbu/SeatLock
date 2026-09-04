@@ -172,14 +172,23 @@
           </includes>
           <!--
             docker-java negotiates Engine API 1.32 by default, which Docker
-            Desktop 4.x / Engine 29 refuse: the minimum they accept is 1.40. The
-            rejection surfaces as an opaque HTTP 400 that Testcontainers reports
-            as "Could not find a valid Docker environment", which sends you
-            looking at sockets and permissions rather than at a version number.
+            Engine 29 refuses: the minimum it accepts is 1.40. The rejection
+            surfaces as an opaque HTTP 400 that Testcontainers reports as
+            "Could not find a valid Docker environment" - which sends you
+            looking at sockets, pipes and permissions rather than at a version
+            number. Without this, every Testcontainers test silently *skips*
+            rather than failing, so the build stays green while proving nothing.
+
             1.43 has been supported since Engine 24 (2023), so it is safe on any
             Docker new enough to run this project.
+
+            Set as a system property rather than through the plugin's argLine,
+            because overriding argLine here would clobber the one JaCoCo and
+            similar agents inject - and that breakage is silent too.
           -->
-          <argLine>-Dapi.version=1.43</argLine>
+          <systemPropertyVariables>
+            <api.version>1.43</api.version>
+          </systemPropertyVariables>
         </configuration>
       </plugin>
     </plugins>
