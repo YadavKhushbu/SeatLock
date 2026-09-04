@@ -1,0 +1,106 @@
+spring:
+  application:
+    name: seatlock
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/seatlock}
+    username: ${DB_USER:seatlock}
+    password: ${DB_PASSWORD:seatlock}
+    hikari:
+      # Deliberately small. A pool larger than the database can service does not
+      # add throughput, it just moves the queue somewhere with no visibility and
+      # no timeout. Roughly (2 x cores) + effective spindles is the usual start.
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: 5
+      # Fail fast rather than pile up requests waiting for a connection.
+      connection-timeout: 3000
+      leak-detection-threshold: 20000
+      # The actual bound on how long a booking may block behind a row lock.
+      # Postgres has no FOR UPDATE WAIT syntax, so this is the only way to get a
+      # finite wait; without it one wedged transaction stalls every request for
+      # the same seat until something times out at the load balancer instead.
+      connection-init-sql: SET lock_timeout = '3s'
+
+  jpa:
+    open-in-view: false   # No lazy loading during view rendering. Every fetch is
+                          # deliberate and visible in the service layer instead.
+    hibernate:
+      ddl-auto: validate  # Flyway owns the schema; Hibernate only checks the
+                          # mapping still matches it and refuses to start if not.
+    properties:
+      hibernate:
+        jdbc.batch_size: 30
+        order_inserts: true
+        order_updates: true
+        query.in_clause_parameter_padding: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 500ms   # The gate is a latency optimisation; a slow Redis must
+                       # never become the thing that makes checkout slow.
+      lettuce:
+        pool:
+          max-active: 32
+          max-idle: 16
+          min-idle: 4
+
+  threads:
+    virtual:
+      enabled: false   # Pinning is still possible under synchronized blocks on
+                       # Java 17; revisit on 21+ where this path is well trodden.
+
+seatlock:
+  jwt:
+    # Override in every real environment. The app refuses to start on a secret
+    # shorter than 32 bytes rather than silently signing with weak key material.
+    secret: ${JWT_SECRET:dev-only-secret-change-me-in-production-1234567890}
+    ttl: ${JWT_TTL:PT2H}
+    issuer: seatlock
+
+  booking:
+    hold-ttl: ${HOLD_TTL:PT8M}        # Long enough to enter card details, short
+                                      # enough that abandoned carts do not starve
+                                      # inventory during a popular on-sale.
+    reaper-batch: 200
+    reaper-interval: PT10S
+    lock-wait: PT0.15S
+    lock-lease: PT10S
+
+server:
+  port: ${PORT:8080}
+  error:
+    include-message: never    # Error bodies come from GlobalExceptionHandler; the
+    include-stacktrace: never # container default would leak internals.
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: seatlock
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+
+logging:
+  level:
+    com.seatlock: ${LOG_LEVEL:INFO}
+    # Uncomment while investigating a locking question; far too loud otherwise.
+    # org.hibernate.SQL: DEBUG
+    # org.hibernate.orm.jdbc.bind: TRACE

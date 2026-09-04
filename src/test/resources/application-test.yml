@@ -1,0 +1,32 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    placeholder-replacement: false
+    # The demo seed in V2 does load here, and tests must not depend on it. Every
+    # test builds its own venue, event and seats via TestFixtures and scopes its
+    # assertions to that event id, so seed rows and other test classes sharing
+    # this container cannot influence a result.
+
+seatlock:
+  jwt:
+    secret: test-only-secret-that-is-definitely-long-enough-0123456789
+    ttl: PT1H
+    issuer: seatlock
+  booking:
+    hold-ttl: PT8M
+    reaper-batch: 200
+    # Slower than production so the reaper cannot fire in the middle of an
+    # assertion and make a test flaky for reasons unrelated to what it covers.
+    reaper-interval: PT60S
+    lock-wait: PT0.15S
+    lock-lease: PT10S
+
+logging:
+  level:
+    com.seatlock: INFO
+    org.testcontainers: WARN
+    com.github.dockerjava: WARN
