@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+# The default GITHUB_TOKEN cannot create check runs, which the test reporter
+# below needs. Granting the minimum rather than write-all: contents to read the
+# repository, checks to publish the test report.
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   build:
     name: Build and test
