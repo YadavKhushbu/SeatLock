@@ -106,7 +106,18 @@ curl -s -X POST $BASE/api/v1/bookings \
 
 **The reaper sleeps too.** Expired holds are reclaimed by a scheduled job, which does not run while the machine is stopped. Holds then expire late rather than on time. Harmless for a demo, but know the answer if asked — the seat is still correctly held, just for longer than advertised.
 
-**Memory.** 512MB is tight for Spring Boot with JPA, Redis and Security. If the logs show `ExitOnOutOfMemoryError`, raise the VM to `1gb` rather than increasing `MaxRAMPercentage` — the JVM needs room outside the heap for metaspace, thread stacks and direct buffers.
+**Memory — measured, not estimated.** The image was run locally under a hard 512MB cap before writing this:
+
+| | |
+|---|---|
+| Boot to readiness | 18s |
+| At rest | 432MB / 512MB (84%) |
+| After 600 requests | 446MB / 512MB (87%) |
+| OOM kills | none |
+
+512MB genuinely works. `fly.toml` still specifies **1gb**, because `ExitOnOutOfMemoryError` kills the JVM outright instead of degrading — so crossing the line means a hard restart mid-request, and 13% headroom is not much to absorb a spike. With `auto_stop_machines` the machine bills only while serving, so the larger size costs little.
+
+If you do need more room later, raise the VM size rather than `MaxRAMPercentage`: the JVM needs space outside the heap for metaspace, thread stacks and direct buffers, and giving the heap a bigger share of a small box makes OOM more likely, not less.
 
 **Connection limits.** `DB_POOL_SIZE=5` is set for a reason. The local default of 20 will exhaust a free-tier Postgres, and Hikari fails at startup rather than degrading.
 

@@ -51,7 +51,16 @@ primary_region = "bom"          # Mumbai. Put the app next to the database, not
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"              # Tight but sufficient with MaxRAMPercentage=70.
-                                # If you see ExitOnOutOfMemoryError in the logs,
-                                # go to 1gb rather than raising the percentage —
-                                # the JVM needs headroom outside the heap.
+  memory = "1gb"
+  # Measured, not guessed. The image was run locally under a hard 512mb cap:
+  # it booted in 18s and served a full booking, but sat at 84% of the limit at
+  # rest and 87% after 600 requests. That works, and leaves almost nothing spare.
+  #
+  # The failure mode is what decides it. ExitOnOutOfMemoryError kills the JVM
+  # outright rather than degrading, so exceeding the cap means a hard restart
+  # mid-request. With auto-stop the machine only bills while it is actually
+  # serving, so the larger size costs very little and removes the cliff.
+  #
+  # Raise the size rather than MaxRAMPercentage if you ever need more: the JVM
+  # needs room outside the heap for metaspace, thread stacks and direct buffers,
+  # and giving the heap a bigger share of a small box makes OOM more likely.
