@@ -8,6 +8,10 @@ Java 17 · Spring Boot 3.3 · PostgreSQL · Redis · Testcontainers
 
 ### ▶ Try it: **[seatlock-jj41.onrender.com](https://seatlock-jj41.onrender.com)**
 
+![Holding a seat, booking it, then eight buyers racing for one seat](docs/concurrency-race.gif)
+
+*Recorded against the live deployment: a seat held and booked, then eight simultaneous buyers sent at a single seat.*
+
 Pick a seat, hold it, book it. Every request the page makes is logged beside it, because the point of this project is the API rather than the page.
 
 Then press **"Race for a seat"**. It registers eight users and fires eight hold requests for the same seat, released together on one starting gun:
