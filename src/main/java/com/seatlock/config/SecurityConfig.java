@@ -47,7 +47,7 @@ public class SecurityConfig {
                         // The root redirects to the docs. Public, because the
                         // people who need it most are the ones who have just
                         // been handed the URL and have no token yet.
-                        .requestMatchers("/", "/favicon.ico").permitAll()
+                        .requestMatchers("/", "/favicon.ico", "/demo/**").permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((req, res, e) ->

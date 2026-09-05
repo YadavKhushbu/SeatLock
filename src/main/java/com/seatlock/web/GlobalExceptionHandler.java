@@ -16,6 +16,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.Instant;
 import java.util.List;
@@ -81,6 +82,24 @@ public class GlobalExceptionHandler {
                 .body(new Dtos.ApiError(Instant.now(), HttpStatus.CONFLICT.value(), "SEATS_BUSY",
                         "Those seats are being booked right now; please retry",
                         request.getRequestURI(), null));
+    }
+
+    /**
+     * A request for something that is not there.
+     *
+     * <p>Without this, Spring's {@code NoResourceFoundException} falls through to
+     * the catch-all below and becomes a 500 with an ERROR log line. Browsers ask
+     * every site for {@code /favicon.ico}, so that single omission turns an
+     * ordinary page visit into a logged server error and quietly inflates the
+     * error rate that on-call alerting watches.
+     *
+     * <p>Logged at debug: a 404 is information for the caller, not an incident.
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Dtos.ApiError> handleMissingResource(NoResourceFoundException e,
+                                                               HttpServletRequest request) {
+        log.debug("No resource at {}", request.getRequestURI());
+        return build(HttpStatus.NOT_FOUND, "NOT_FOUND", "No resource at this path", request, null);
     }
 
     @ExceptionHandler(Exception.class)

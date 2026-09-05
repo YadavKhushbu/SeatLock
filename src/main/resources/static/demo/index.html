@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SeatLock — live demo</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --text:#e6edf3; --dim:#8b949e;
+    --avail:#238636; --avail-hi:#2ea043; --held:#9e6a03; --booked:#6e2f2f;
+    --accent:#58a6ff; --bad:#f85149; --good:#3fb950;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--text);
+    font:15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding:20px 24px; border-bottom:1px solid var(--line);
+    display:flex; gap:16px; align-items:baseline; flex-wrap:wrap;
+  }
+  header h1 { margin:0; font-size:19px; letter-spacing:-0.01em; }
+  header .sub { color:var(--dim); font-size:13px; }
+  header a { color:var(--accent); font-size:13px; text-decoration:none; }
+  header a:hover { text-decoration:underline; }
+  .wrap { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,460px); gap:24px; padding:24px; align-items:start; }
+  @media (max-width:1000px){ .wrap { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px; }
+  .card h2 { margin:0 0 4px; font-size:15px; }
+  .card p.hint { margin:0 0 14px; color:var(--dim); font-size:13px; }
+  select, button {
+    font:inherit; color:var(--text); background:#21262d;
+    border:1px solid var(--line); border-radius:6px; padding:7px 12px; cursor:pointer;
+  }
+  button:hover:not(:disabled) { border-color:var(--dim); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.primary { background:var(--avail); border-color:var(--avail-hi); font-weight:600; }
+  button.danger  { background:#472326; border-color:#8c3a3a; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:14px; }
+  .legend { display:flex; gap:16px; font-size:12px; color:var(--dim); margin:14px 0 6px; flex-wrap:wrap; }
+  .legend i { width:11px; height:11px; border-radius:3px; display:inline-block; margin-right:5px; vertical-align:-1px; }
+
+  .section-name { margin:16px 0 7px; font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--dim); }
+  .seat-row { display:flex; gap:5px; margin-bottom:5px; align-items:center; }
+  .row-label { width:16px; font-size:11px; color:var(--dim); font-family:var(--mono); }
+  .seat {
+    width:26px; height:26px; border-radius:4px; border:1px solid transparent;
+    font-size:10px; font-family:var(--mono); color:#fff; cursor:pointer; padding:0;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .seat.AVAILABLE { background:var(--avail); }
+  .seat.AVAILABLE:hover { background:var(--avail-hi); transform:scale(1.14); }
+  .seat.HELD   { background:var(--held); cursor:not-allowed; }
+  .seat.BOOKED { background:var(--booked); cursor:not-allowed; color:#c9a0a0; }
+  .seat.mine   { outline:2px solid var(--accent); outline-offset:1px; }
+
+  #log { font-family:var(--mono); font-size:11.5px; max-height:440px; overflow-y:auto; line-height:1.5; }
+  #log .entry { padding:5px 0; border-bottom:1px solid #21262d; }
+  #log .m { color:var(--accent); font-weight:600; }
+  #log .ok { color:var(--good); } #log .err { color:var(--bad); }
+  #log pre { margin:3px 0 0; white-space:pre-wrap; word-break:break-all; color:var(--dim); }
+  .status { padding:10px 12px; border-radius:6px; font-size:13px; margin-bottom:14px; display:none; }
+  .status.show { display:block; }
+  .status.ok  { background:#12261a; border:1px solid #2d5a3d; }
+  .status.err { background:#2b1416; border:1px solid #6b2b2f; }
+  .tally { font-family:var(--mono); font-size:13px; margin-top:10px; }
+  .tally b { font-size:19px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SeatLock</h1>
+  <span class="sub">a seat is sold at most once, however many people click at the same instant</span>
+  <span style="flex:1"></span>
+  <a href="/swagger-ui.html">API docs →</a>
+  <a href="https://github.com/YadavKhushbu/SeatLock">source →</a>
+</header>
+
+<div class="wrap">
+  <div>
+    <div class="card">
+      <div class="row">
+        <select id="eventPicker"></select>
+        <span class="sub" id="who" style="color:var(--dim);font-size:12.5px"></span>
+      </div>
+
+      <div id="status" class="status"></div>
+
+      <div class="legend">
+        <span><i style="background:var(--avail)"></i>Available</span>
+        <span><i style="background:var(--held)"></i>Held by someone</span>
+        <span><i style="background:var(--booked)"></i>Booked</span>
+        <span><i style="background:var(--avail);outline:2px solid var(--accent)"></i>Yours</span>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <button id="bookBtn" class="primary" disabled>Confirm booking</button>
+        <button id="releaseBtn" disabled>Release hold</button>
+        <button id="refreshBtn">Refresh</button>
+        <span id="countdown" class="sub" style="color:var(--held);font-family:var(--mono)"></span>
+      </div>
+
+      <div id="seatMap"></div>
+    </div>
+
+    <div class="card" style="margin-top:20px">
+      <h2>Prove it: send 8 buyers at one seat, simultaneously</h2>
+      <p class="hint">
+        Registers eight separate users, then fires eight hold requests for the same seat
+        released together on one starting gun. Exactly one should win. Every other
+        request should come back <code>409 SEAT_UNAVAILABLE</code> — a conflict, never a 500,
+        because losing a race is the system working, not failing.
+      </p>
+      <div class="row">
+        <button id="raceBtn" class="danger">Race for a seat</button>
+        <span class="sub" id="raceHint" style="color:var(--dim);font-size:12.5px"></span>
+      </div>
+      <div id="raceResult" class="tally"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Live API traffic</h2>
+    <p class="hint">Every request this page makes. It is the same public API in the docs — nothing is mocked.</p>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let token = null, me = null, eventId = null, hold = null, seats = [], ticker = null;
+
+// ---------------------------------------------------------------- API plumbing
+
+function log(method, path, status, body) {
+  const el = document.createElement('div');
+  el.className = 'entry';
+  const cls = status >= 200 && status < 300 ? 'ok' : 'err';
+  el.innerHTML = `<span class="m">${method}</span> ${path}
+    <span class="${cls}">${status}</span>`;
+  if (body !== undefined) {
+    const pre = document.createElement('pre');
+    const text = typeof body === 'string' ? body : JSON.stringify(body);
+    pre.textContent = text.length > 300 ? text.slice(0, 300) + '…' : text;
+    el.appendChild(pre);
+  }
+  const box = $('#log');
+  box.prepend(el);
+  while (box.children.length > 40) box.lastChild.remove();
+}
+
+async function api(method, path, { body, auth = token, key, quiet } = {}) {
+  const headers = {};
+  if (body) headers['Content-Type'] = 'application/json';
+  if (auth) headers['Authorization'] = 'Bearer ' + auth;
+  if (key) headers['Idempotency-Key'] = key;
+
+  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  let data = null;
+  try { data = await res.json(); } catch { /* 204 has no body */ }
+  if (!quiet) log(method, path, res.status, data ?? '');
+  return { ok: res.ok, status: res.status, data };
+}
+
+function say(msg, bad) {
+  const el = $('#status');
+  el.className = 'status show ' + (bad ? 'err' : 'ok');
+  el.textContent = msg;
+}
+
+const rnd = () => Math.random().toString(36).slice(2, 10);
+
+async function register(label) {
+  const r = await api('POST', '/api/v1/auth/register', {
+    auth: null,
+    quiet: !!label,
+    body: { email: `${label || 'demo'}-${rnd()}@seatlock.demo`,
+            password: 'correct-horse-battery', fullName: label || 'Demo Visitor' }
+  });
+  return r.data?.accessToken;
+}
+
+// -------------------------------------------------------------------- seat map
+
+function render() {
+  const bySection = {};
+  for (const s of seats) (bySection[s.section] ||= {})[s.rowLabel] ||= [];
+  for (const s of seats) bySection[s.section][s.rowLabel].push(s);
+
+  const held = new Set((hold?.seats || []).map(s => s.eventSeatId));
+  const out = [];
+  for (const [section, rows] of Object.entries(bySection)) {
+    out.push(`<div class="section-name">${section}</div>`);
+    for (const [label, list] of Object.entries(rows)) {
+      out.push(`<div class="seat-row"><span class="row-label">${label}</span>`);
+      for (const s of list.sort((a, b) => a.seatNumber - b.seatNumber)) {
+        const mine = held.has(s.eventSeatId) ? ' mine' : '';
+        const money = (s.priceCents / 100).toFixed(0);
+        out.push(`<button class="seat ${s.status}${mine}" data-id="${s.eventSeatId}"
+          title="${section} ${label}${s.seatNumber} · ₹${money} · ${s.status}"
+          ${s.status === 'AVAILABLE' ? '' : 'disabled'}>${s.seatNumber}</button>`);
+      }
+      out.push('</div>');
+    }
+  }
+  $('#seatMap').innerHTML = out.join('');
+  $('#seatMap').querySelectorAll('.seat[data-id]').forEach(b =>
+    b.onclick = () => takeSeat(Number(b.dataset.id)));
+}
+
+async function loadSeats() {
+  const r = await api('GET', `/api/v1/events/${eventId}/seats`, { quiet: true });
+  seats = r.data?.seats || [];
+  log('GET', `/api/v1/events/${eventId}/seats`, r.status,
+      `${r.data?.available} of ${r.data?.total} seats available`);
+  render();
+}
+
+// ------------------------------------------------------------------ hold / book
+
+async function takeSeat(seatId) {
+  if (hold) await releaseHold(true);
+  const r = await api('POST', `/api/v1/events/${eventId}/holds`, { body: { eventSeatIds: [seatId] } });
+
+  if (!r.ok) {
+    say(`${r.data?.code}: ${r.data?.message}`, true);
+    await loadSeats();
+    return;
+  }
+  hold = r.data;
+  say(`Seat held for you. It expires in ${hold.secondsRemaining}s unless you confirm.`);
+  $('#bookBtn').disabled = false;
+  $('#releaseBtn').disabled = false;
+  startCountdown();
+  await loadSeats();
+}
+
+function startCountdown() {
+  clearInterval(ticker);
+  let left = hold?.secondsRemaining ?? 0;
+  const tick = () => {
+    if (!hold) { $('#countdown').textContent = ''; return clearInterval(ticker); }
+    if (left <= 0) {
+      clearInterval(ticker);
+      $('#countdown').textContent = 'hold expired';
+      hold = null;
+      $('#bookBtn').disabled = $('#releaseBtn').disabled = true;
+      say('That hold expired. The reaper returns the seat to the pool automatically.', true);
+      loadSeats();
+      return;
+    }
+    const m = String(Math.floor(left / 60)).padStart(2, '0');
+    $('#countdown').textContent = `expires in ${m}:${String(left % 60).padStart(2, '0')}`;
+    left--;
+  };
+  tick();
+  ticker = setInterval(tick, 1000);
+}
+
+async function releaseHold(silent) {
+  if (!hold) return;
+  await api('DELETE', `/api/v1/holds/${hold.holdId}`);
+  hold = null;
+  clearInterval(ticker);
+  $('#countdown').textContent = '';
+  $('#bookBtn').disabled = $('#releaseBtn').disabled = true;
+  if (!silent) { say('Hold released — the seat is immediately on sale again.'); await loadSeats(); }
+}
+
+async function book() {
+  if (!hold) return;
+  // A UUID per attempt: retrying with the same key replays the original booking
+  // instead of buying twice.
+  const key = crypto.randomUUID();
+  const r = await api('POST', '/api/v1/bookings', { body: { holdId: hold.holdId }, key });
+  if (r.ok) {
+    say(`Booked. Reference ${r.data.reference} — ₹${(r.data.totalCents / 100).toFixed(0)}`);
+    hold = null; clearInterval(ticker); $('#countdown').textContent = '';
+    $('#bookBtn').disabled = $('#releaseBtn').disabled = true;
+  } else {
+    say(`${r.data?.code}: ${r.data?.message}`, true);
+  }
+  await loadSeats();
+}
+
+// ------------------------------------------------------------------- the race
+
+async function race() {
+  const target = seats.find(s => s.status === 'AVAILABLE');
+  if (!target) return say('No free seat left to race for. Pick another event.', true);
+
+  const N = 8;
+  $('#raceBtn').disabled = true;
+  $('#raceResult').innerHTML = '';
+  $('#raceHint').textContent = `registering ${N} buyers…`;
+
+  const tokens = await Promise.all(Array.from({ length: N }, (_, i) => register('rival' + i)));
+  $('#raceHint').textContent = `all ${N} released at once at seat ${target.eventSeatId}…`;
+
+  // Built first, awaited together: the requests leave the browser back to back
+  // rather than one completing before the next begins.
+  const results = await Promise.all(tokens.map(t =>
+    api('POST', `/api/v1/events/${eventId}/holds`,
+        { body: { eventSeatIds: [target.eventSeatId] }, auth: t, quiet: true })));
+
+  const won = results.filter(r => r.ok).length;
+  const conflict = results.filter(r => r.status === 409).length;
+  const server = results.filter(r => r.status >= 500).length;
+
+  log('POST', `${N} × /api/v1/events/${eventId}/holds`, won === 1 ? 201 : 500,
+      `${won} granted · ${conflict} conflicted · ${server} server errors`);
+
+  $('#raceResult').innerHTML =
+    `<b style="color:${won === 1 ? 'var(--good)' : 'var(--bad)'}">${won}</b> seat granted &nbsp;·&nbsp;
+     <b>${conflict}</b> received 409 SEAT_UNAVAILABLE &nbsp;·&nbsp;
+     <b style="color:${server ? 'var(--bad)' : 'var(--dim)'}">${server}</b> server errors<br>
+     <span style="color:var(--dim)">${
+       won === 1 && server === 0
+         ? 'Exactly one winner. The losers were told the seat was taken, not that something broke.'
+         : 'Unexpected — this should always be exactly one winner and zero 5xx.'}</span>`;
+
+  $('#raceHint').textContent = '';
+  $('#raceBtn').disabled = false;
+  await loadSeats();
+}
+
+// ---------------------------------------------------------------------- startup
+
+async function boot() {
+  say('Waking the server — the free tier sleeps when idle, so the first call can take a while.');
+  token = await register();
+  if (!token) return say('Could not reach the API. If it was asleep, give it a minute and reload.', true);
+
+  me = 'a fresh anonymous visitor';
+  $('#who').textContent = 'signed in automatically as a throwaway demo user';
+
+  const ev = await api('GET', '/api/v1/events');
+  const events = ev.data?.content || [];
+  $('#eventPicker').innerHTML = events.map(e =>
+    `<option value="${e.id}">${e.title} — ${e.city}</option>`).join('');
+  eventId = events[0]?.id;
+  if (!eventId) return say('No events found. Has Flyway seeded the database?', true);
+
+  await loadSeats();
+  say('Pick a seat to hold it, then confirm. Or scroll down and race eight buyers at one seat.');
+}
+
+$('#eventPicker').onchange = async e => { eventId = Number(e.target.value); hold = null; await loadSeats(); };
+$('#bookBtn').onclick = book;
+$('#releaseBtn').onclick = () => releaseHold(false);
+$('#refreshBtn').onclick = loadSeats;
+$('#raceBtn').onclick = race;
+boot();
+</script>
+</body>
+</html>
