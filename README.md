@@ -6,6 +6,20 @@ Overselling is the defining failure of ticketing systems. It is easy to build a 
 
 Java 17 · Spring Boot 3.3 · PostgreSQL · Redis · Testcontainers
 
+### ▶ Try it: **[seatlock-jj41.onrender.com](https://seatlock-jj41.onrender.com)**
+
+Pick a seat, hold it, book it. Every request the page makes is logged beside it, because the point of this project is the API rather than the page.
+
+Then press **"Race for a seat"**. It registers eight users and fires eight hold requests for the same seat, released together on one starting gun:
+
+```
+1 seat granted  ·  7 received 409 SEAT_UNAVAILABLE  ·  0 server errors
+```
+
+One winner, every time. Losing a race returns a conflict, never a 500 — because losing is the system working, not failing. Open the page in two browser tabs and race yourself.
+
+> Hosted on a free tier that sleeps when idle, so the first request may take ~50s to wake it.
+
 ---
 
 ## Contents
@@ -19,6 +33,8 @@ Java 17 · Spring Boot 3.3 · PostgreSQL · Redis · Testcontainers
 - [Design decisions](#design-decisions)
 - [What I would do next](#what-i-would-do-next)
 - [Deploying it](DEPLOYMENT.md)
+
+The demo page is one static file at [`src/main/resources/static/demo/index.html`](src/main/resources/static/demo/index.html) — no framework, no build step, nothing that dilutes a backend project.
 
 ---
 
