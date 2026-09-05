@@ -1,22 +1,37 @@
 # Deploying SeatLock
 
-A runbook for putting this on the internet with a clickable Swagger URL, at roughly zero cost.
+A runbook for putting this on the internet with a clickable Swagger URL.
 
-**Target:** Fly.io for the app, [Neon](https://neon.tech) for Postgres, [Upstash](https://upstash.com) for Redis. All three have free tiers that comfortably cover a demo. Fly is a few dollars a month if you want it always-on instead of scaling to zero.
+**Target: [Render](https://render.com) for the app, [Neon](https://neon.tech) for Postgres, [Upstash](https://upstash.com) for Redis.** All three have free tiers, and none of them needed a card at the time of writing.
 
-> Pricing and free-tier limits on all three change regularly. Check them before assuming this is free.
+> Free-tier terms change constantly. Verify before assuming any of this is still free.
+
+### Why not Fly.io
+
+`fly.toml` is still in this repo and still correct, but Fly now **requires a credit card before you can create an app at all**:
+
+```
+Error: We need your payment information to continue!
+```
+
+Its free allowance still exists, and with `auto_stop_machines` the running cost would be small, but a card on file is a precondition. Use `fly.toml` instead if you already have Fly billing set up: it specifies a 1GB machine and is the better home for this if cost is not the constraint.
+
+### The trade Render makes
+
+| | Render free | Fly (paid) |
+|---|---|---|
+| Card required | No | **Yes** |
+| Memory | 512MB, fixed | 1GB, adjustable |
+| Idle behaviour | Sleeps after ~15 min | Scales to zero |
+| Cold start | ~50s+ | ~20-30s |
+
+512MB is enough, verified below, but there is no headroom to buy if that changes.
 
 ---
 
 ## Before you start
 
-You need accounts on Fly.io, Neon and Upstash, and the Fly CLI:
-
-```bash
-# Windows (PowerShell)
-iwr https://fly.io/install.ps1 -useb | iex
-fly auth login
-```
+Accounts on Render, Neon and Upstash. No CLI needed: Render deploys from GitHub, so everything happens in the browser and in this repo.
 
 ---
 
@@ -42,45 +57,44 @@ Create a database and copy the **endpoint, port and password** (not the REST URL
 
 Upstash is TLS-only, which `fly.toml` already sets via `REDIS_SSL=true`.
 
-## 3. Secrets
+## 3. Deploy on Render
 
-Everything sensitive goes through `fly secrets`, never `fly.toml`:
+`render.yaml` in this repo is a Blueprint: Render reads it and creates the service with the runtime, region, health check and JVM settings already set.
 
-```bash
-fly secrets set \
-  DB_URL="jdbc:postgresql://ep-xxxx.aws.neon.tech/neondb?sslmode=require" \
-  DB_USER="your_neon_user" \
-  DB_PASSWORD="your_neon_password" \
-  REDIS_HOST="your-db.upstash.io" \
-  REDIS_PORT="6379" \
-  REDIS_PASSWORD="your_upstash_password" \
-  JWT_SECRET="$(openssl rand -base64 48)"
-```
+1. Render dashboard -> **New -> Blueprint**
+2. Connect the GitHub repo `YadavKhushbu/SeatLock`
+3. Render reads `render.yaml` and prompts for the values marked `sync: false`:
 
-Generate `JWT_SECRET` randomly — do not reuse the development default. The app **refuses to start** on a secret under 32 bytes, so a weak one fails loudly at boot rather than quietly signing tokens anyone can forge.
+| Variable | Value |
+|---|---|
+| `DB_URL` | `jdbc:postgresql://EP-XXX.neon.tech/neondb?sslmode=require` |
+| `DB_USER` | your Neon user |
+| `DB_PASSWORD` | your Neon password |
+| `REDIS_HOST` | `your-db.upstash.io` |
+| `REDIS_PORT` | `6379` |
+| `REDIS_PASSWORD` | your Upstash password |
 
-## 4. Deploy
+`JWT_SECRET` is deliberately **not** in that list. `render.yaml` marks it `generateValue: true`, so Render mints a long random value and keeps it stable across deploys; it never passes through a terminal, a clipboard or a chat window. The app refuses to start on a secret under 32 bytes, so a weak one fails loudly at boot rather than quietly signing forgeable tokens.
 
-```bash
-fly launch --no-deploy   # first time only; keeps the committed fly.toml
-fly deploy
-fly open /swagger-ui.html
-```
+4. **Apply.** The first build takes several minutes, because Maven builds inside Docker.
 
-## 5. Check it actually works
+## 4. Check it actually works
+
+Watch the deploy log for `Started SeatLockApplication`, and for Flyway applying `V1__init` and `V2__seed_demo_data` on first boot.
 
 ```bash
-fly status
-fly logs
+BASE=https://seatlock.onrender.com   # your actual URL from the dashboard
 
-curl -s https://seatlock.fly.dev/actuator/health | jq
-curl -s https://seatlock.fly.dev/api/v1/events | jq '.content[0]'
+curl -s $BASE/actuator/health | jq
+curl -s $BASE/api/v1/events | jq '.content[0]'
 ```
+
+The first request after an idle period takes ~50s while the container wakes. That is the free tier, not a failure.
 
 A full booking, end to end:
 
 ```bash
-BASE=https://seatlock.fly.dev
+BASE=https://seatlock.onrender.com   # your actual URL
 
 TOKEN=$(curl -s -X POST $BASE/api/v1/auth/register \
   -H 'Content-Type: application/json' \
@@ -102,9 +116,9 @@ curl -s -X POST $BASE/api/v1/bookings \
 
 ## Things that will bite you
 
-**Cold starts.** With `min_machines_running = 0` the first request after an idle period waits 20–30s for the JVM and Flyway. If you are sending the link to someone, hit it yourself first. Set `min_machines_running = 1` to avoid it, at the cost of running continuously.
+**Cold starts are worse here than on Fly.** Render's free tier sleeps the container after ~15 minutes idle, and waking it means a fresh container plus JVM start plus Flyway: expect 50s or more. **Always hit the URL yourself before sending it to anyone** - a recruiter who clicks and sees a spinner will not wait.
 
-**The reaper sleeps too.** Expired holds are reclaimed by a scheduled job, which does not run while the machine is stopped. Holds then expire late rather than on time. Harmless for a demo, but know the answer if asked — the seat is still correctly held, just for longer than advertised.
+**The reaper sleeps too.** Expired holds are reclaimed by a scheduled job, which does not run while the container is asleep. Holds then expire late rather than on time. Harmless for a demo, but know the answer if asked — the seat is still correctly held, just for longer than advertised.
 
 **Memory — measured, not estimated.** The image was run locally under a hard 512MB cap before writing this:
 
@@ -129,8 +143,10 @@ If you do need more room later, raise the VM size rather than `MaxRAMPercentage`
 
 ## Alternatives
 
-**Railway** is the easiest path: connect the repo, it detects the Dockerfile, and Postgres and Redis are one click each. No free tier any more (~$5/month), but almost no configuration.
+**Fly.io** is the better home for this once a card is on file: 1GB instead of 512MB, faster cold starts, and `fly.toml` in this repo is ready to use. `fly deploy` is all that stands between you and a running app.
 
-**Render** has a free web service tier, though it sleeps aggressively and its free Postgres is time-limited. Pair it with Neon rather than using its own database.
+**Railway** connects to the repo, detects the Dockerfile, and adds Postgres and Redis in one click each. Almost no configuration, but no free tier (~$5/month).
+
+**Render's own Postgres** is deliberately unused here. Its free database is time-limited, which is a poor property for something meant to sit on a CV for months; Neon's free tier persists.
 
 **Oracle Cloud Always Free** gives a genuinely free ARM VM large enough to run `docker compose up` as-is — including OrderFlow with Kafka. Far more setup and maintenance, but the only realistically free way to host the full event-driven project.

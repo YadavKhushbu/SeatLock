@@ -1,0 +1,83 @@
+# Render blueprint for SeatLock.
+#
+# Postgres and Redis are deliberately NOT defined here. Render's own free
+# Postgres expires after a fixed trial window, which is a bad property for
+# something you want to leave on a CV for months. Neon and Upstash both have
+# free tiers that persist, so the database and cache live there and this file
+# describes only the application.
+#
+# See DEPLOYMENT.md for the full runbook.
+
+services:
+  - type: web
+    name: seatlock
+    runtime: docker
+    plan: free
+    region: singapore            # Nearest free region to India, and the same
+                                 # region Neon offers as ap-southeast-1. Put the
+                                 # app next to the database: a booking makes
+                                 # several round trips to Postgres and one to
+                                 # the user.
+    dockerfilePath: ./Dockerfile
+
+    # Readiness, not liveness: it reports UP only once Flyway has finished and
+    # the datasource answers, so Render will not route traffic to an instance
+    # that is still migrating.
+    healthCheckPath: /actuator/health/readiness
+
+    envVars:
+      # ----------------------------------------------------------------- JVM
+      # MaxRAMPercentage is 60 here against 70 in fly.toml, because Render's
+      # free plan is fixed at 512MB and cannot simply be made bigger.
+      #
+      # Measured honestly: the difference is smaller than expected. Under a hard
+      # 512MB cap this image sits at ~84% at rest with 70%, and ~88% with 60%,
+      # because resident memory reflects pages already touched rather than the
+      # configured maximum. What matters more is that RSS *plateaus* -- 88.3% at
+      # rest, 88.8% after 800 requests, no OOM kill, no restart. It is stable
+      # near the ceiling rather than creeping toward it.
+      #
+      # The lower percentage is kept anyway: it caps worst-case heap growth, and
+      # the container OOM killer does not negotiate. Exceeding the cap kills the
+      # process outright rather than slowing it down, so headroom is worth more
+      # than throughput when the ceiling cannot move.
+      - key: JAVA_OPTS
+        value: "-XX:MaxRAMPercentage=60 -XX:+UseG1GC -XX:MaxMetaspaceSize=128m -Xss512k -XX:+ExitOnOutOfMemoryError"
+
+      # ------------------------------------------------------------ database
+      # Free-tier Postgres caps total connections far below a dedicated server,
+      # and Hikari fails at startup rather than degrading if it cannot fill the
+      # pool. Small and explicit.
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: DB_POOL_MIN_IDLE
+        value: "1"
+
+      # --------------------------------------------------------------- redis
+      - key: REDIS_SSL
+        value: "true"            # Upstash is TLS-only.
+
+      - key: LOG_LEVEL
+        value: "INFO"
+
+      # --------------------------------------------------------------- secrets
+      # sync: false means Render prompts for these in the dashboard and stores
+      # them encrypted, rather than reading them from this file. Nothing secret
+      # is ever committed to git.
+      - key: DB_URL
+        sync: false              # jdbc:postgresql://EP-XXX.neon.tech/neondb?sslmode=require
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: REDIS_HOST
+        sync: false              # your-db.upstash.io
+      - key: REDIS_PORT
+        sync: false              # 6379
+      - key: REDIS_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        # generateValue makes Render mint a long random value and keep it stable
+        # across deploys. Better than a human-chosen secret, and it means the
+        # value never passes through a terminal, a chat window or a clipboard.
+        generateValue: true
