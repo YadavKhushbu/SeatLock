@@ -6,7 +6,9 @@ Overselling is the defining failure of ticketing systems. It is easy to build a 
 
 Java 17 · Spring Boot 3.3 · PostgreSQL · Redis · Testcontainers
 
-### ▶ Try it: **[seatlock-jj41.onrender.com](https://seatlock-jj41.onrender.com)**
+### Try it live
+
+**[seatlock-jj41.onrender.com](https://seatlock-jj41.onrender.com)** — no signup, it books you in as a throwaway user.
 
 ![Holding a seat, booking it, then eight buyers racing for one seat](docs/concurrency-race.gif)
 
